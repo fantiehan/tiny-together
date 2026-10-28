@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 import { creatureMaterial, flashWhite } from './model-materials.js';
 
 // All characters face local +Z. Reused geometry/materials keep the toy-like
@@ -74,6 +75,7 @@ const sphereGeo = geo('sphere', () => new THREE.SphereGeometry(1, 16, 12));
 const cylinderGeo = geo('cylinder', () => new THREE.CylinderGeometry(1, 1, 1, 20));
 const coneGeo = geo('cone', () => new THREE.ConeGeometry(1, 1, 16));
 const plainBoxGeo = geo('plain-box', () => new THREE.BoxGeometry(1, 1, 1));
+const characterSphereGeo=geo('character-soft-sphere',()=>new THREE.SphereGeometry(1,24,16));
 function mesh(parent, geometry, color, pos = [0, 0, 0], scale = [1, 1, 1], extra = {}) {
   const m = new THREE.Mesh(geometry, material(color, extra));
   m.position.set(...pos); m.scale.set(...scale);
@@ -81,6 +83,7 @@ function mesh(parent, geometry, color, pos = [0, 0, 0], scale = [1, 1, 1], extra
   parent.add(m); return m;
 }
 function ball(p, color, pos, scale, extra = {}) { return mesh(p, sphereGeo, color, pos, scale, extra); }
+function softBall(p,color,pos,scale,extra={}) { return mesh(p,characterSphereGeo,color,pos,scale,extra); }
 function box(p, color, pos, size, radius = .08, extra = {}) {
   const key = `round:${size}:${radius}`;
   return mesh(p, geo(key, () => new RoundedBoxGeometry(...size, 3, radius)), color, pos, [1, 1, 1], extra);
@@ -97,36 +100,110 @@ function torus(p, color, pos, radius, thickness, rotation = null, extra = {}) {
   const m = mesh(p, g, color, pos, [1, 1, 1], extra); if (rotation) m.rotation.set(...rotation); return m;
 }
 
-function face(parent, y, z, { width = .3, eye = .038, cheeks = null, angry = false, mouth = true } = {}) {
+const HEAD={x:.485,y:.395,z:.32,p:2.65};
+const CHARACTER_HEAD_Y=.935;
+function headFront(x,y){return HEAD.z*Math.pow(Math.max(0,1-Math.abs(x/HEAD.x)**HEAD.p-Math.abs(y/HEAD.y)**HEAD.p),1/HEAD.p);}
+function headGeometry(){
+  return geo('character-soft-squircle-head',()=>{
+    const g=new THREE.SphereGeometry(1,40,28),positions=g.attributes.position,normals=g.attributes.normal;
+    const exponent=2/HEAD.p,normal=new THREE.Vector3();
+    for(let i=0;i<positions.count;i++){
+      const x=Math.sign(positions.getX(i))*Math.abs(positions.getX(i))**exponent;
+      const y=Math.sign(positions.getY(i))*Math.abs(positions.getY(i))**exponent;
+      const z=Math.sign(positions.getZ(i))*Math.abs(positions.getZ(i))**exponent;
+      positions.setXYZ(i,x*HEAD.x,y*HEAD.y,z*HEAD.z);
+      normal.set(Math.sign(x)*Math.abs(x)**(HEAD.p-1)/HEAD.x,Math.sign(y)*Math.abs(y)**(HEAD.p-1)/HEAD.y,Math.sign(z)*Math.abs(z)**(HEAD.p-1)/HEAD.z).normalize();
+      normals.setXYZ(i,normal.x,normal.y,normal.z);
+    }
+    g.computeBoundingBox();g.computeBoundingSphere();return g;
+  });
+}
+function curvedCheek(cx,cy){
+  return geo(`character-curved-cheek:${cx}:${cy}`,()=>{
+    const points=[],normals=[],uvs=[],indices=[],segments=32,rings=5,n=new THREE.Vector3();
+    const vertex=(x,y,r)=>{
+      const z=headFront(x,y),offset=.0025+.002*(1-r*r);
+      points.push(x,y,z+offset);
+      n.set(Math.sign(x)*Math.abs(x/HEAD.x)**(HEAD.p-1)/HEAD.x,Math.sign(y)*Math.abs(y/HEAD.y)**(HEAD.p-1)/HEAD.y,Math.abs(z/HEAD.z)**(HEAD.p-1)/HEAD.z).normalize();
+      normals.push(n.x,n.y,n.z);uvs.push(.5+(x-cx)/.17,.5+(y-cy)/.134);
+    };
+    vertex(cx,cy,0);
+    for(let ring=1;ring<=rings;ring++)for(let j=0;j<segments;j++){
+      const radius=ring/rings,a=j*Math.PI*2/segments;vertex(cx+Math.cos(a)*.085*radius,cy+Math.sin(a)*.067*radius,radius);
+    }
+    for(let j=0;j<segments;j++)indices.push(0,1+j,1+(j+1)%segments);
+    for(let ring=1;ring<rings;ring++)for(let j=0;j<segments;j++){
+      const a=1+(ring-1)*segments+j,b=1+ring*segments+j,c=1+ring*segments+(j+1)%segments,d=1+(ring-1)*segments+(j+1)%segments;
+      indices.push(a,b,c,a,c,d);
+    }
+    const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(points,3));g.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));g.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));g.setIndex(indices);return g;
+  });
+}
+
+function face(parent, y, z, { width = .3, eye = .038, cheeks = null, angry = false, mouth = true, curved=false } = {}) {
   const eyes=[];
   for (const side of [-1, 1]) {
-    eyes.push(ball(parent, C.ink, [side * width / 2, y, z], [eye, eye * 1.08, eye * .43], {roughness:.24,metalness:0}));
-    eyes.push(ball(parent, C.white, [side*width/2-eye*.24,y+eye*.31,z+eye*.39], [eye*.16,eye*.19,eye*.08], {roughness:.35,metalness:0}));
+    const eyeZ=curved?headFront(side*width/2,y)+.004:z;
+    eyes.push(ball(parent, C.ink, [side * width / 2, y, eyeZ], [eye, eye * 1.08, eye * .43], {roughness:.24,metalness:0}));
+    eyes.push(ball(parent, C.white, [side*width/2-eye*.24,y+eye*.31,eyeZ+eye*.39], [eye*.16,eye*.19,eye*.08], {roughness:.35,metalness:0}));
     if (angry) {
       const brow = box(parent, C.ink, [side * width / 2, y + eye * 1.9, z], [eye * 2, .018, .024], .008);
       brow.rotation.z = side * -.24;
     }
-    if (cheeks) ball(parent, cheeks, [side * width * .84, y - .07, z - .003], [.085, .067, .014]);
+    if (cheeks){
+      if(curved)mesh(parent,curvedCheek(side*width*.84,y-.07),cheeks,[0,0,0],[1,1,1],{roughness:.86});
+      else ball(parent, cheeks, [side * width * .84, y - .07, z - .003], [.085, .067, .014]);
+    }
   }
-  if (mouth) tube(parent, C.ink, [[-.042,y-.035,z+.009],[-.034,y-.057,z+.015],[-.013,y-.06,z+.019],[0,y-.043,z+.02],[.013,y-.06,z+.019],[.034,y-.057,z+.015],[.042,y-.035,z+.009]], .011);
+  if (mouth){
+    const line=[[-.042,y-.035,z+.009],[-.034,y-.057,z+.015],[-.013,y-.06,z+.019],[0,y-.043,z+.02],[.013,y-.06,z+.019],[.034,y-.057,z+.015],[.042,y-.035,z+.009]];
+    if(curved)for(const point of line)point[2]=headFront(point[0],point[1])+.007;
+    tube(parent,C.ink,line,.011);
+  }
   return eyes;
 }
 
 function bodyGeometry() {
-  return geo('character-seamless-body', () => {
-    const s = new THREE.Shape();
-    // One closed body-and-leg outline. No ankle seams or dark foot caps on Bubu.
-    s.moveTo(-.21,.55);
-    s.bezierCurveTo(-.31,.53,-.34,.44,-.32,.34);
-    s.lineTo(-.3,.11);
-    s.bezierCurveTo(-.3,-.025,-.13,-.025,-.1,.055);
-    s.lineTo(-.075,.105); s.lineTo(.075,.105); s.lineTo(.1,.055);
-    s.bezierCurveTo(.13,-.025,.3,-.025,.3,.11);
-    s.lineTo(.32,.34);
-    s.bezierCurveTo(.34,.44,.31,.53,.21,.55);
-    s.closePath();
-    const g = new THREE.ExtrudeGeometry(s, { depth: .26, bevelEnabled: true, bevelSegments: 3, steps: 1, bevelSize: .06, bevelThickness: .06, curveSegments: 10 });
-    g.translate(0, .06, -.13); return g;
+  return geo('character-seamless-soft-volume',()=>{
+    // A single smooth implicit volume: the belly and short legs are fused before
+    // meshing. There are no extruded face caps or bevel rings to catch the light.
+    const ellipsoid=(x,y,z,rx,ry,rz)=>{
+      const k0=Math.hypot(x/rx,y/ry,z/rz),k1=Math.hypot(x/(rx*rx),y/(ry*ry),z/(rz*rz));
+      return k1>1e-8?k0*(k0-1)/k1:-Math.min(rx,ry,rz);
+    };
+    const smoothUnion=(a,b,k)=>{const h=THREE.MathUtils.clamp(.5+.5*(b-a)/k,0,1);return b*(1-h)+a*h-k*h*(1-h);};
+    const shoulder=(x,y,z)=>{
+      const p=2.8,px=Math.abs(x/.355),py=Math.abs((y-.515)/.17),pz=Math.abs(z/.205);
+      const q=(px**p+py**p+pz**p)**(1/p);
+      if(q<1e-8)return -.17;
+      const gradient=Math.hypot(px**(p-1)/.355,py**(p-1)/.17,pz**(p-1)/.205)*q**(1-p);
+      return (q-1)/gradient;
+    };
+    const resolution=30,field=new MarchingCubes(resolution,material(C.white),false,false,12000);
+    const extent={x:.48,y:.42,z:.32},centerY=.33;
+    field.isolation=0;
+    for(let z=0;z<resolution;z++)for(let y=0;y<resolution;y++)for(let x=0;x<resolution;x++){
+      const px=(x/resolution*2-1)*extent.x,py=(y/resolution*2-1)*extent.y+centerY,pz=(z/resolution*2-1)*extent.z;
+      const belly=smoothUnion(ellipsoid(px,py-.355,pz,.345,.285,.205),shoulder(px,py,pz),.065);
+      const left=ellipsoid(px+.18,py-.117,pz,.16,.135,.18),right=ellipsoid(px-.18,py-.117,pz,.16,.135,.18);
+      field.field[x+y*resolution+z*resolution*resolution]=-smoothUnion(smoothUnion(belly,left,.085),right,.085);
+    }
+    field.update();
+    const count=field.count,positions=new Float32Array(count*3),normals=new Float32Array(count*3),uvs=new Float32Array(count*2);
+    let minY=Infinity;
+    for(let i=0;i<count;i++){
+      positions[i*3]=field.positionArray[i*3]*extent.x;
+      positions[i*3+1]=field.positionArray[i*3+1]*extent.y+centerY;
+      positions[i*3+2]=field.positionArray[i*3+2]*extent.z;
+      const nx=field.normalArray[i*3]/extent.x,ny=field.normalArray[i*3+1]/extent.y,nz=field.normalArray[i*3+2]/extent.z,n=Math.hypot(nx,ny,nz)||1;
+      normals.set([nx/n,ny/n,nz/n],i*3);
+      minY=Math.min(minY,positions[i*3+1]);
+      uvs[i*2]=positions[i*3]/.8+.5;uvs[i*2+1]=positions[i*3+1]/.7;
+    }
+    // Keep the existing skin/foot socket coordinate system at ground level.
+    for(let i=0;i<count;i++)positions[i*3+1]-=minY;
+    const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(positions,3));g.setAttribute('normal',new THREE.BufferAttribute(normals,3));g.setAttribute('uv',new THREE.BufferAttribute(uvs,2));
+    g.computeBoundingBox();g.computeBoundingSphere();field.geometry.dispose();return g;
   });
 }
 
@@ -134,7 +211,7 @@ function skinnedBody(parent,color) {
   const geometry=geo('character-skinned-body',()=>{
     const g=bodyGeometry().clone(),positions=g.attributes.position,indices=[],weights=[];
     for(let i=0;i<positions.count;i++){
-      const y=positions.getY(i),x=positions.getX(i),weight=THREE.MathUtils.smoothstep((.46-y)/.3,0,1);
+      const y=positions.getY(i),x=positions.getX(i),weight=THREE.MathUtils.smoothstep((.46-y)/.3,0,1)*THREE.MathUtils.smoothstep(Math.abs(x),0,.2);
       indices.push(0,x<0?1:2,0,0);weights.push(1-weight,weight,0,0);
     }
     g.setAttribute('skinIndex',new THREE.Uint16BufferAttribute(indices,4));
@@ -147,6 +224,20 @@ function skinnedBody(parent,color) {
   // The body can be deformed by skinning outside its bind-pose bounding sphere.
   body.frustumCulled=false;
   return {body,legs:[left,right]};
+}
+
+function characterArmGeometry(side){
+  return geo(`character-continuous-arm:${side}`,()=>{
+    // Shoulder, little arm and rounded palm are one skin surface. The hand
+    // socket is invisible inside its end rather than an extra wrist/hand ball.
+    const g=new THREE.CapsuleGeometry(.103,.115,7,24,3);g.translate(0,-.105,0);
+    const p=g.attributes.position;
+    for(let i=0;i<p.count;i++){
+      const y=p.getY(i),u=THREE.MathUtils.clamp((.0555-y)/.321,0,1),curve=u*u*(3-2*u),taper=1-.035*u;
+      p.setXYZ(i,p.getX(i)*taper+side*(.025+.06*curve),y,p.getZ(i)*taper+.065*curve);
+    }
+    g.computeVertexNormals();g.computeBoundingBox();g.computeBoundingSphere();return g;
+  });
 }
 
 const wrapAngle=a=>Math.atan2(Math.sin(a),Math.cos(a));
@@ -164,37 +255,39 @@ export function createCharacter(kind = 'yier') {
   const isYier=kind==='yier',root=new THREE.Group();root.name=isYier?'一二':'布布';
   const rig=new THREE.Group();root.add(rig);
   const skin=isYier?C.white:C.brown,{body,legs}=skinnedBody(rig,skin);
-  const head=new THREE.Group();head.position.y=1.005;rig.add(head);
-  box(head,skin,[0,0,0],[.97,.79,.64],.25).material=softToyMaterial(skin);
+  const head=new THREE.Group();head.position.y=CHARACTER_HEAD_Y;rig.add(head);
+  mesh(head,headGeometry(),skin).material=softToyMaterial(skin);
   for(const side of [-1,1]){
-    ball(head,isYier?C.ink:skin,[side*.365,.34,-.015],[.135,.145,.108]).material=softToyMaterial(isYier?C.ink:skin);
+    softBall(head,isYier?C.ink:skin,[side*.365,.34,-.015],[.135,.145,.108]).material=softToyMaterial(isYier?C.ink:skin);
     if(!isYier){
       ball(head,'#dfad88',[side*.365,.347,.077],[.092,.102,.024]).material=softToyMaterial('#dfad88');
       ball(head,C.inner,[side*.365,.347,.095],[.069,.079,.017],{roughness:.8});
     }
   }
-  const eyes=face(head,-.063,.324,{width:.315,eye:.039,cheeks:isYier?C.pink:C.cheek});
+  const eyes=face(head,-.063,.324,{width:.315,eye:.039,cheeks:isYier?C.pink:C.cheek,curved:true});
   const eyeScales=eyes.map(eye=>eye.scale.y),arms=[],hands=[];
   for(const side of [-1,1]){
     const pivot=new THREE.Group();pivot.position.set(side*.255,.53,0);rig.add(pivot);
-    const arm=ball(pivot,skin,[side*.073,-.1,.015],[.105,.17,.12]);arm.material=softToyMaterial(skin);arm.rotation.z=side*-.38;
-    const hand=new THREE.Group();hand.name=side===1?'right-hand':'left-hand';hand.position.set(side*.083,-.215,.07);pivot.add(hand);
-    ball(hand,skin,[0,0,0],[.075,.077,.075]).material=softToyMaterial(skin);
-    ball(hand,skin,[-side*.055,.025,.032],[.035,.044,.04]).material=softToyMaterial(skin);
-    arms.push(pivot);hands.push(hand);mergeStatic(hand,`hand-${kind}-${side}`);
+    const arm=mesh(pivot,characterArmGeometry(side),skin);arm.material=softToyMaterial(skin);
+    const hand=new THREE.Group();hand.name=side===1?'right-hand':'left-hand';hand.position.set(side*.077,-.19,.055);pivot.add(hand);
+    arms.push(pivot);hands.push(hand);
   }
+  const footCaps=[];
   if(isYier){
-    for(let i=0;i<2;i++)ball(legs[i],C.ink,[i===0?-.025:.025,-.185,.085],[.112,.065,.139]).material=softToyMaterial(C.ink);
-    for(const side of [-1,1]){
-      const lobe=ball(rig,C.ink,[side*.047,.635,.235],[.062,.043,.025]);lobe.rotation.z=side*.35;
-      tube(rig,'#6c4438',[[side*.021,.633,.259],[side*.044,.646,.262],[side*.064,.649,.256]],.0045);
-      tube(rig,'#321f1c',[[side*.022,.627,.258],[side*.045,.615,.26],[side*.066,.615,.253]],.0035);
+    for(let i=0;i<2;i++){
+      const cap=ball(legs[i],C.ink,[i===0?-.025:.025,-.185,.085],[.112,.065,.139]);cap.material=softToyMaterial(C.ink);footCaps.push(cap);
     }
-    ball(rig,C.ink,[0,.632,.258],[.027,.03,.018]);
+    const bow=new THREE.Group();bow.position.y=CHARACTER_HEAD_Y-1.005;rig.add(bow);
+    for(const side of [-1,1]){
+      const lobe=ball(bow,C.ink,[side*.047,.635,.235],[.062,.043,.025]);lobe.rotation.z=side*.35;
+      tube(bow,'#6c4438',[[side*.021,.633,.259],[side*.044,.646,.262],[side*.064,.649,.256]],.0045);
+      tube(bow,'#321f1c',[[side*.022,.627,.258],[side*.045,.615,.26],[side*.066,.615,.253]],.0035);
+    }
+    ball(bow,C.ink,[0,.632,.258],[.027,.03,.018]);mergeStatic(bow,`bow-${kind}`);
   }
-  const tail=ball(rig,isYier?C.ink:skin,[0,.22,-.22],[.095,.095,.092]);tail.material=softToyMaterial(isYier?C.ink:skin);
+  const tail=softBall(rig,isYier?C.ink:skin,[0,.22,-.22],[.095,.095,.092]);tail.material=softToyMaterial(isYier?C.ink:skin);
   const back=new THREE.Group(),hipLeft=new THREE.Group(),hipRight=new THREE.Group(),neck=new THREE.Group();
-  back.position.set(0,.39,-.245);hipLeft.position.set(-.32,.29,-.04);hipRight.position.set(.32,.29,-.04);neck.position.set(0,.625,0);
+  back.position.set(0,.39,-.245);hipLeft.position.set(-.32,.29,-.04);hipRight.position.set(.32,.29,-.04);neck.position.set(0,CHARACTER_HEAD_Y-.38,0);
   rig.add(back,hipLeft,hipRight,neck);
   const pack=new THREE.Group();back.add(pack);box(pack,'#ad8e6e',[0,0,-.025],[.3,.27,.12],.055).material=creatureMaterial('plush','#ad8e6e');
   box(pack,'#d8b77d',[0,.045,-.091],[.23,.09,.03],.018);ball(pack,C.gold,[0,.032,-.111],[.022,.024,.009]);
@@ -209,6 +302,13 @@ export function createCharacter(kind = 'yier') {
   for(let i=0;i<bindPositions.count;i++)if(bindPositions.getY(i)<.18){
     const point=new THREE.Vector3().fromBufferAttribute(bindPositions,i),key=point.toArray().map(v=>v.toFixed(3)).join(',');
     if(!sampleKeys.has(key)){sampleKeys.add(key);footSamples.push({point,side:point.x<0?0:1,weight:bindWeights.getY(i)});}
+  }
+  for(let side=0;side<footCaps.length;side++){
+    const cap=footCaps[side];cap.updateMatrix();const positions=cap.geometry.attributes.position,seen=new Set();
+    for(let i=0;i<positions.count;i++){
+      const point=new THREE.Vector3().fromBufferAttribute(positions,i).applyMatrix4(cap.matrix),key=point.toArray().map(v=>v.toFixed(4)).join(',');
+      if(!seen.has(key)){seen.add(key);footSamples.push({point,side,cap:true});}
+    }
   }
   const state={lastT:null,phase:0,moving:0,turn:0,lastYaw:root.rotation.y,aim:0,hit:0,hitTime:0,attack:null,primary:null,wasAirborne:false,landing:0};
   function dock(entry,held=false){
@@ -230,7 +330,7 @@ export function createCharacter(kind = 'yier') {
     for(const entry of equipment.values())dock(entry,entry.id===id);
   }
   root.userData={
-    kind,head,body,rig,arms,legs,sockets,equipment,
+    kind,head,body,rig,arms,legs,footCaps,sockets,equipment,
     clearEquipment(){for(const entry of equipment.values()){entry.mount.removeFromParent();entry.object.removeFromParent();}equipment.clear();state.primary=null;state.attack=null;pack.visible=false;},
     dispose(){root.userData.clearEquipment();body.skeleton.dispose();},
     equipWeapon(id,object,options={}){
@@ -286,7 +386,7 @@ export function createCharacter(kind = 'yier') {
         legs[i].position.z=Math.sin(cycle)*.018*walk;
         if(airborne){legs[i].rotation.x=.45+Math.sin(t*5+i)*.07;legs[i].rotation.z=i===0?.12:-.12;legs[i].position.y=.275;}
       }
-      head.position.y=1.005+breath*.45;
+      head.position.y=CHARACTER_HEAD_Y+breath*.45;
       head.rotation.x=damp(head.rotation.x,-.045*walk+hit*.12-(id==='camera'?wind*.06:0),8,delta);
       head.rotation.y=damp(head.rotation.y,state.aim*.65-state.turn*.075-Math.sin(step)*.035*walk,7,delta);
       head.rotation.z=damp(head.rotation.z,-Math.sin(step)*.03*walk+state.turn*.025,8,delta);
@@ -316,8 +416,11 @@ export function createCharacter(kind = 'yier') {
         // no bind-pose geometry is modified and there are no separate leg seams.
         legs[0].updateMatrix();legs[1].updateMatrix();rig.updateMatrix();let lowest=Infinity;
         for(const sample of footSamples){
-          contactPoint.copy(sample.point);contactPoint.x-=sample.side===0?-.18:.18;contactPoint.y-=.26;
-          contactPoint.applyMatrix4(legs[sample.side].matrix).lerp(sample.point,1-sample.weight).applyMatrix4(rig.matrix);
+          contactPoint.copy(sample.point);
+          if(!sample.cap){contactPoint.x-=sample.side===0?-.18:.18;contactPoint.y-=.26;}
+          contactPoint.applyMatrix4(legs[sample.side].matrix);
+          if(!sample.cap)contactPoint.lerp(sample.point,1-sample.weight);
+          contactPoint.applyMatrix4(rig.matrix);
           lowest=Math.min(lowest,contactPoint.y);
         }
         if(Number.isFinite(lowest))rig.position.y-=lowest;

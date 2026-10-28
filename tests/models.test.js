@@ -43,11 +43,51 @@ for(const kind of ['yier','bubu'])test(`${kind}: 腿实际迈步，连体蒙皮�
     update(character,frame/60);
     let floor=Infinity;
     for(const i of samples){body.getVertexPosition(i,point);point.applyMatrix4(body.matrixWorld);floor=Math.min(floor,point.y);}
+    for(const cap of character.userData.footCaps){
+      const positions=cap.geometry.attributes.position;
+      for(let i=0;i<positions.count;i++){point.fromBufferAttribute(positions,i).applyMatrix4(cap.matrixWorld);floor=Math.min(floor,point.y);}
+    }
     assert.ok(Math.abs(floor)<1e-4,'a planted foot must remain on the floor');
     body.getVertexPosition(toe,point);minToe=Math.min(minToe,point.z);maxToe=Math.max(maxToe,point.z);
   }
   assert.ok(maxToe-minToe>.15,'toe must have a real forward/backward stride');
   assert.deepEqual(body.geometry.attributes.position.array,original,'animation must not mutate shared bind-pose geometry');
+  character.userData.dispose();
+});
+
+test('短手臂与圆掌为单一连续表面，握持挂点处没有独立手掌或手指球',()=>{
+  for(const kind of ['yier','bubu']){
+    const character=createCharacter(kind);
+    for(const [i,arm] of character.userData.arms.entries()){
+      const armMeshes=meshes(arm);
+      assert.equal(armMeshes.length,1,'bare arm and palm should share one continuous mesh');
+      assert.equal(connectedIslands(armMeshes[0].geometry),1);
+      const hand=i===0?character.userData.sockets.leftHand:character.userData.sockets.rightHand;
+      assert.equal(hand.parent,arm);
+      assert.equal(meshes(hand).length,0,'the equipment socket should not need a separate spherical hand');
+    }
+    character.userData.dispose();
+  }
+});
+
+test('左右腿最大步幅时裆部连续皮肤不翻面或夹出中心膜',()=>{
+  const character=createCharacter('bubu'),body=character.userData.body,positions=body.geometry.attributes.position;
+  const a=new THREE.Vector3(),b=new THREE.Vector3(),c=new THREE.Vector3(),ab=new THREE.Vector3(),ac=new THREE.Vector3(),normal=new THREE.Vector3(),posed=new THREE.Vector3();
+  const baseNormals=[];
+  for(let i=0;i<positions.count;i+=3){
+    a.fromBufferAttribute(positions,i);b.fromBufferAttribute(positions,i+1);c.fromBufferAttribute(positions,i+2);
+    normal.crossVectors(ab.subVectors(b,a),ac.subVectors(c,a));
+    if(normal.lengthSq()>1e-12)baseNormals.push({index:i,normal:normal.clone().normalize()});
+  }
+  for(const angle of [-.62,-.4,0,.4,.62]){
+    character.userData.legs[0].rotation.x=angle;character.userData.legs[1].rotation.x=-angle;
+    character.updateMatrixWorld(true);body.skeleton.update();
+    for(const triangle of baseNormals){
+      body.getVertexPosition(triangle.index,a);body.getVertexPosition(triangle.index+1,b);body.getVertexPosition(triangle.index+2,c);
+      posed.crossVectors(ab.subVectors(b,a),ac.subVectors(c,a)).normalize();
+      assert.ok(posed.dot(triangle.normal)>0,'skin triangle should preserve its outward orientation during the stride');
+    }
+  }
   character.userData.dispose();
 });
 
