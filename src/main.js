@@ -137,7 +137,7 @@ function fireWeapon(w){
  }
  if(w.id==='camera'){
   fx.slash(p.x,p.y+.7,p.z,Math.atan2(dx,dz),range,0xfff6d2);
-  for(const e of enemies){const x=e.x-p.x,z=e.z-p.z,l=Math.hypot(x,z,e.y-p.y);if(!e.dead&&l<range&&((x*dx+z*dz)/(l||1)>(evolved?-.15:.4))){damageEnemy(e,damage,dx,dz,.25,true,p.y,true);e.stun=.5;}}
+  for(const e of enemies){const x=e.x-p.x,z=e.z-p.z,l=Math.hypot(x,z,e.y-p.y);if(!e.dead&&l<range&&((x*dx+z*dz)/(l||1)>(evolved?-.15:.4))&&!world.segmentBlocked(origin,{x:e.x,y:e.y+e.height*.5,z:e.z},0)){damageEnemy(e,damage,dx,dz,.25,true,p.y,true);e.stun=.5;}}
   shake=Math.max(shake,.08);
  }
  if(w.id==='scarf'){
@@ -197,8 +197,9 @@ function updateEnemies(dt){
    else if(e.phase==='recover'){v=.3;if(e.timer<0){e.phase='walk';e.timer=2.5;}}
   }
   if(e.type==='shooter'){
-   if(d<9&&d>4)v=0;if(d<=4&&Math.abs(e.y-playerPos.y)<.7){nx=-dx;nz=-dz;nd=d;v=.9;}
-   if(e.phase==='walk'&&e.timer<0){
+   const clearShot=!world.segmentBlocked({x:e.x,y:e.y+.5,z:e.z},{x:playerPos.x,y:playerPos.y+.65,z:playerPos.z},.02);
+   if(clearShot&&d<9&&d>4)v=0;if(clearShot&&d<=4&&Math.abs(e.y-playerPos.y)<.7){nx=-dx;nz=-dz;nd=d;v=.9;}
+   if(e.phase==='walk'&&e.timer<0&&clearShot){
     const visible=(e.x-playerPos.x)*Math.sin(input.yaw)+(e.z-playerPos.z)*Math.cos(input.yaw)>-3;
     if(visible||e.elite){e.phase='wind';e.timer=.62;e.aim={x:playerPos.x+velocity.x*.15,y:playerPos.y+.55,z:playerPos.z+velocity.z*.15};fx.ring(e.aim.x,e.aim.z,.65,0xd98fbf,.62,playerPos.y);}else e.timer=.6;
    }else if(e.phase==='wind'){
