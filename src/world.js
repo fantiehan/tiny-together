@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { createTerrain, createRoomRoute } from './terrain.js';
 
 // Cache the source image, then crop each atlas cell before giving it repeat UVs.
 // Repeating an atlas itself would leak neighbouring materials into the floor.
@@ -45,6 +47,7 @@ export function createWorld(scene, stage = 0) {
   };
   const materials = new Map();
   const artMaterials = new Map();
+  const propMaterials = new Map();
   function atlasTexture(file, column, row, columns, rows, fallback, repeat = 1, compose = null) {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 1024;
@@ -75,6 +78,20 @@ export function createWorld(scene, stage = 0) {
       resources.add(m); artMaterials.set(index, m);
     }
     return artMaterials.get(index);
+  }
+  function propMaterial(index, color = 0xffffff) {
+    const key = `${index}-${color}`;
+    if (!propMaterials.has(key)) {
+      const texture = atlasTexture('prop-materials-v2.jpg', index % 2, Math.floor(index / 2), 2, 2, null, index === 2 ? 2 : 3);
+      const material = new THREE.MeshStandardMaterial({
+        color, map: texture, bumpMap: texture,
+        bumpScale: index === 2 ? 0.005 : index === 3 ? 0.022 : 0.013,
+        roughness: index === 2 ? 0.3 : index === 3 ? 0.93 : 0.89,
+        metalness: index === 2 ? 0.64 : 0,
+      });
+      resources.add(material); propMaterials.set(key, material);
+    }
+    return propMaterials.get(key);
   }
   function decal(index, w, h, x, y, z, parent = group, rotationX = 0, rotationY = 0) {
     const plane = mesh(new THREE.PlaneGeometry(w, h), artMaterial(index), parent);
@@ -132,7 +149,10 @@ export function createWorld(scene, stage = 0) {
     box(w, h, d, color, 0, h / 2, 0, 0.12, g);
     // A different colored inset makes the blocks feel painted, not placeholder cubes.
     box(w * 0.74, h * 0.71, 0.025, colors.cream, 0, h / 2, d / 2 + 0.015, 0.05, g);
-    if (collide) obstacles.push({ x, z, r: Math.max(w, d) * 0.53 });
+    if (collide) {
+      const collider = { x, z, r: Math.max(w, d) * 0.53, minY: 0, maxY: h };
+      obstacles.push(collider); g.userData.collider = collider;
+    }
     return g;
   }
   function seedRandom(seed) {
@@ -259,7 +279,7 @@ export function createWorld(scene, stage = 0) {
   let bookNumber = 0;
   function book(x, z, w, h, d, color, angle = 0, parent = group) {
     const g = local(x, z, parent); g.rotation.y = angle;
-    box(w, h * 0.8, d, 0xf7edd6, 0, h / 2, 0, 0.07, g);
+    box(w, h * 0.8, d, 0xf7edd6, 0, h / 2, 0, 0.07, g).material = propMaterial(1, 0xfff6dd);
     box(w + 0.12, h * 0.1, d + 0.15, color, 0, h * 0.05, 0, 0.04, g);
     box(w + 0.12, h * 0.1, d + 0.15, color, 0, h * 0.95, 0, 0.04, g);
     box(0.13, h, d + 0.15, color, -w / 2, h / 2, 0, 0.04, g);
@@ -294,7 +314,7 @@ export function createWorld(scene, stage = 0) {
       const cereal = torus(0.23, 0.11, i % 2 ? colors.yellow : 0xcb9b6d, Math.cos(a) * r, 0.53 + (i % 3) * 0.13, Math.sin(a) * r, g);
       cereal.rotation.x = Math.PI / 2 + (i % 2) * 0.5;
     }
-    obstacles.push({ x, z, r: 1.6 });
+    obstacles.push({ x, z, r: 1.6, minY: 0, maxY: 1.24 });
     return g;
   }
   function piping(w, h, z, color, parent) {
@@ -354,10 +374,12 @@ export function createWorld(scene, stage = 0) {
   function interaction(type, x, z, label, description, builder) {
     const g = local(x, z);
     g.name = `interactive-${type}`;
+    g.userData.keepUnbatched = true;
     const item = { id: `${stage}-${type}`, type, x, z, r: 3.2, mesh: g, active: false, cooldown: 0, label, description };
     builder(g, item);
     marker(g, type === 'snack' ? 0xf0b94f : 0x72d4bd);
-    obstacles.push({ x, z, r: type === 'domino' ? 0.65 : 0.95 });
+    const physicalHeights = { snack: 1.97, fan: 2.75, domino: 1.5, honey: 1.51, kettle: 2.13, sprinkler: 1.3, mushroom: 1.51 };
+    if (type !== 'launch') obstacles.push({ x, z, r: type === 'domino' ? 0.65 : 0.95, minY: 0, maxY: physicalHeights[type] });
     interactables.push(item);
     return item;
   }
@@ -541,19 +563,21 @@ export function createWorld(scene, stage = 0) {
     plant(19, -18, 1.1, colors.peach);
     block(-5.7, -6, 1.4, 1.3, 1.4, colors.blue, 0.3);
     block(5.7, 6.5, 1.2, 1.2, 1.2, colors.coral, -0.2);
-    block(6.4, 7, 1.1, 1.1, 1.1, colors.yellow, 0.1).position.y = 1.2;
+    const smallUpperBlock = block(6.4, 7, 1.1, 1.1, 1.1, colors.yellow, 0.1); smallUpperBlock.position.y = 1.2;
+    smallUpperBlock.userData.collider.minY = 1.2; smallUpperBlock.userData.collider.maxY = 2.3;
     // Mid-distance landmarks make the room legible from the shoulder camera.
     book(-11, -9, 4.3, 0.75, 3.5, colors.pink, -0.2);
     const atlas = book(-11, -9, 4, 0.6, 3.3, colors.blue, 0.12); atlas.position.y = 0.75;
-    obstacles.push({ x: -11, z: -9, r: 2.2 });
+    obstacles.push({ x: -11, z: -9, r: 2.2, minY: 0, maxY: 1.35 });
     block(10.5, -8, 2.2, 2.4, 2.2, colors.yellow, 0.2);
-    const upperBlock = block(10.6, -8, 1.8, 1.8, 1.8, colors.coral, -0.1, false); upperBlock.position.y = 2.4;
+    const upperBlock = block(10.6, -8, 1.8, 1.8, 1.8, colors.coral, -0.1); upperBlock.position.y = 2.4;
+    upperBlock.userData.collider.minY = 2.4; upperBlock.userData.collider.maxY = 4.2;
     mug(-10.5, 8, colors.cream, 1.15);
-    obstacles.push({ x: -10.5, z: 8, r: 1.5 });
+    obstacles.push({ x: -10.5, z: 8, r: 1.5, minY: 0, maxY: 2.45 });
     cerealBowl(10.5, 9);
     const storyBook = book(-15, -12.5, 4.1, 0.75, 6.2, colors.blue, 0.18);
     storyBook.rotation.x = Math.PI / 2; storyBook.position.y = 3.1;
-    obstacles.push({ x: -15, z: -12.5, r: 2.05 });
+    obstacles.push({ x: -15, z: -12.5, r: 2.05, minY: 0, maxY: 6.275 });
     const musicBox = local(13, -13);
     box(3.8, 2.6, 3.2, colors.peach, 0, 1.3, 0, 0.25, musicBox);
     box(4, 0.4, 3.4, colors.cream, 0, 2.8, 0, 0.15, musicBox);
@@ -565,10 +589,10 @@ export function createWorld(scene, stage = 0) {
     sphere(0.06, colors.brown, -0.22, 3.66, 0.68, musicBox, 1, 1, 0.4);
     sphere(0.06, colors.brown, 0.22, 3.66, 0.68, musicBox, 1, 1, 0.4);
     decal(2, 2.5, 1.45, 0, 1.45, 1.615, musicBox);
-    obstacles.push({ x: 13, z: -13, r: 2.05 });
+    obstacles.push({ x: 13, z: -13, r: 2.05, minY: 0, maxY: 4.32 });
     const pencil = cylinder(0.13, 0.13, 3, colors.yellow, -10, 0.16, 7);
     pencil.rotation.z = Math.PI / 2; pencil.rotation.y = 0.3;
-    fan(-8, -4);
+    fan(-11, -3.5);
     domino(8, 1);
     snack(-3, 9);
   } else if (stage === 1) {
@@ -604,33 +628,34 @@ export function createWorld(scene, stage = 0) {
     }
     const cookie = cylinder(1, 1, 0.3, 0xd5a86b, -4, 0.18, -7, group, 18);
     for (let i = 0; i < 7; i++) { const a = i * 2.4; sphere(0.11, colors.brown, -4 + Math.cos(a) * 0.6, 0.35, -7 + Math.sin(a) * 0.6, group, 1, 0.35, 1); }
-    obstacles.push({ x: -4, z: -7, r: 1 });
+    obstacles.push({ x: -4, z: -7, r: 1, minY: 0, maxY: 0.39 });
     const sugar = block(5, 7, 1.3, 1.2, 1.3, colors.white, 0.2); sugar.rotation.z = 0.1;
-    cerealBowl(-11, -9);
+    sugar.userData.collider.maxY = 1.34;
+    cerealBowl(-6.5, -8.5);
     mug(10.8, 8, colors.blue, 1.3);
-    obstacles.push({ x: 10.8, z: 8, r: 1.7 });
+    obstacles.push({ x: 10.8, z: 8, r: 1.7, minY: 0, maxY: 2.77 });
     const carton = local(-11, 8);
     box(2.2, 3.2, 2.2, colors.cream, 0, 1.6, 0, 0.12, carton);
     box(2.24, 1.55, 2.24, colors.blue, 0, 1.1, 0, 0.08, carton);
     const cartonTop = box(1.6, 1.6, 2.2, colors.cream, 0, 3.2, 0, 0.08, carton); cartonTop.rotation.z = Math.PI / 4;
     box(0.22, 0.6, 2.2, colors.blue, 0, 4.1, 0, 0.04, carton);
-    obstacles.push({ x: -11, z: 8, r: 1.6 });
+    obstacles.push({ x: -11, z: 8, r: 1.6, minY: 0, maxY: 4.4 });
     const cerealBox = local(-14, -12);
     cerealBox.rotation.y = 0.18;
     box(3.5, 5.9, 1.6, colors.cream, 0, 2.95, 0, 0.13, cerealBox);
     box(3.54, 0.32, 1.64, colors.coral, 0, 5.7, 0, 0.06, cerealBox);
     decal(3, 3.23, 5.25, 0, 2.85, 0.815, cerealBox);
     const flap = box(3.4, 0.06, 0.95, colors.cream, 0, 6.12, -0.3, 0.025, cerealBox); flap.rotation.x = -0.35;
-    obstacles.push({ x: -14, z: -12, r: 1.9 });
+    obstacles.push({ x: -14, z: -12, r: 1.9, minY: 0, maxY: 6.32 });
     const honeyTin = local(13.5, -12.5); honeyTin.rotation.y = -0.2;
     cylinder(1.7, 1.7, 4.1, colors.yellow, 0, 2.05, 0, honeyTin);
     cylinder(1.79, 1.79, 0.27, colors.cream, 0, 4.22, 0, honeyTin);
     cylinder(0.36, 0.36, 0.2, colors.yellow, 0, 4.45, 0, honeyTin);
     decal(4, 2.25, 2.9, 0, 2.1, 1.715, honeyTin);
     const tinBand = torus(1.71, 0.06, colors.cream, 0, 0.24, 0, honeyTin); tinBand.rotation.x = Math.PI / 2;
-    obstacles.push({ x: 13.5, z: -12.5, r: 1.8 });
+    obstacles.push({ x: 13.5, z: -12.5, r: 1.8, minY: 0, maxY: 4.55 });
     honey(-8, -4);
-    kettle(8, -3);
+    kettle(11.8, -1.5);
     snack(0, 10);
   } else {
     // Garden walls become a gigantic picket fence and oversized potted plants.
@@ -677,39 +702,204 @@ export function createWorld(scene, stage = 0) {
     petals.instanceColor.needsUpdate = true;
     for (const [x, z, size] of [[-3, -7, 1.1], [4, 7, 0.9]]) {
       sphere(size, 0xb1afa0, x, size * 0.35, z, group, 1.2, 0.55, 0.9);
-      obstacles.push({ x, z, r: size });
+      obstacles.push({ x, z, r: size, minY: 0, maxY: size * 0.9 });
     }
     // A fallen leaf, enormous at bear scale, is a little landmark.
     const leaf = sphere(2.4, 0xc9bb6c, 11, 0.12, -9, group, 0.55, 0.06, 1.2); leaf.rotation.y = -0.6;
     box(0.045, 0.035, 4.5, 0xa49858, 11, 0.27, -9, 0.01).rotation.y = -0.6;
-    const wateringCan = local(-11, -8);
+    const wateringCan = local(-14.5, -6);
     cylinder(1.4, 1.35, 2.1, colors.teal, 0, 1.05, 0, wateringCan);
     cylinder(0.85, 0.85, 0.05, 0x477c70, 0, 2.12, 0, wateringCan);
     const canRim = torus(1.36, 0.09, colors.cream, 0, 2.1, 0, wateringCan); canRim.rotation.x = Math.PI / 2;
     const canHandle = torus(1.05, 0.13, colors.teal, -0.6, 1.7, 0, wateringCan); canHandle.rotation.y = Math.PI / 2;
     const canSpout = cylinder(0.2, 0.45, 2.5, colors.teal, 1.75, 1.45, 0, wateringCan); canSpout.rotation.z = -0.95;
     const canHead = cylinder(0.6, 0.28, 0.3, colors.cream, 2.7, 2.18, 0, wateringCan); canHead.rotation.z = -0.95;
-    obstacles.push({ x: -11, z: -8, r: 1.6 });
+    obstacles.push({ x: -14.5, z: -6, r: 1.6, minY: 0, maxY: 2.88 });
     const packet = local(11, 9);
     packet.rotation.y = -0.2; packet.rotation.z = 0.08;
     box(2.1, 3.1, 0.3, colors.cream, 0, 1.55, 0, 0.07, packet);
     box(1.9, 0.5, 0.035, colors.teal, 0, 2.65, 0.17, 0.03, packet);
     decal(5, 1.85, 2.35, 0, 1.5, 0.18, packet);
-    obstacles.push({ x: 11, z: 9, r: 1.15 });
-    plant(-13.5, -12, 1.15, colors.peach);
-    obstacles.push({ x: -13.5, z: -12, r: 1.95 });
+    obstacles.push({ x: 11, z: 9, r: 1.15, minY: 0, maxY: 3.18 });
+    plant(-15.5, -14.5, 1.15, colors.peach);
+    obstacles.push({ x: -15.5, z: -14.5, r: 1.95, minY: 0, maxY: 7.95 });
     const seedTin = local(13, -13);
     box(3.2, 4.9, 1.6, colors.cream, 0, 2.45, 0, 0.2, seedTin);
     box(3.35, 0.3, 1.75, colors.teal, 0, 4.85, 0, 0.1, seedTin);
     decal(5, 2.9, 4.2, 0, 2.4, 0.815, seedTin);
-    obstacles.push({ x: 13, z: -13, r: 1.8 });
+    obstacles.push({ x: 13, z: -13, r: 1.8, minY: 0, maxY: 5 });
     sprinkler(-8, -5);
     mushroom(8, 2);
     snack(-3, 10);
   }
 
+  // A genuine connected route: enter on a sloped solid, walk across its top,
+  // cross a narrow bridge with real clearance below, and descend the other side.
+  const route = createRoomRoute(stage);
+  const routeWoodMap = atlasTexture('surface-atlas.jpg', 0, 0, 2, 2, groundTexture('wood'), 2);
+  const routeWoodMaterial = new THREE.MeshStandardMaterial({ map: routeWoodMap, bumpMap: routeWoodMap, bumpScale: 0.018, roughness: 0.76 });
+  resources.add(routeWoodMaterial);
+  const rulerCanvas = document.createElement('canvas'); rulerCanvas.width = 2048; rulerCanvas.height = 256;
+  const rc = rulerCanvas.getContext('2d');
+  rc.fillStyle = '#e5bf75'; rc.fillRect(0, 0, 2048, 256);
+  for (let i = 0; i <= 100; i++) {
+    const x = 20 + i * 20;
+    rc.strokeStyle = '#775b38'; rc.lineWidth = i % 10 ? 2 : 3;
+    rc.beginPath(); rc.moveTo(x, 12); rc.lineTo(x, i % 10 ? (i % 5 ? 42 : 65) : 85); rc.stroke();
+    rc.beginPath(); rc.moveTo(x, 244); rc.lineTo(x, i % 10 ? 218 : 190); rc.stroke();
+    if (i % 10 === 0) { rc.font = 'bold 38px sans-serif'; rc.fillStyle = '#775b38'; rc.fillText(String(i / 10), x - 7, 135); }
+  }
+  rc.strokeStyle = 'rgba(255,244,205,.65)'; rc.lineWidth = 4; rc.strokeRect(4, 4, 2040, 248);
+  const rulerMap = new THREE.CanvasTexture(rulerCanvas); rulerMap.colorSpace = THREE.SRGBColorSpace; rulerMap.anisotropy = 8; resources.add(rulerMap);
+  const rulerMaterial = new THREE.MeshStandardMaterial({ map: rulerMap, roughness: 0.54 }); resources.add(rulerMaterial);
+  const arrows = document.createElement('canvas'); arrows.width = 256; arrows.height = 1024;
+  const ac = arrows.getContext('2d'); ac.clearRect(0, 0, 256, 1024);
+  ac.strokeStyle = '#fff5c5'; ac.lineWidth = 13; ac.lineJoin = 'round';
+  for (let i = 0; i < 4; i++) { const y = 120 + i * 240; ac.beginPath(); ac.moveTo(75, y + 36); ac.lineTo(128, y - 14); ac.lineTo(181, y + 36); ac.stroke(); }
+  const arrowMap = new THREE.CanvasTexture(arrows); arrowMap.colorSpace = THREE.SRGBColorSpace; resources.add(arrowMap);
+  const arrowMaterial = new THREE.MeshBasicMaterial({ map: arrowMap, transparent: true, depthWrite: false, opacity: 0.78, polygonOffset: true, polygonOffsetFactor: -1 }); resources.add(arrowMaterial);
+  for (const s of route.surfaces) {
+    const w = s.maxX - s.minX, d = s.maxZ - s.minZ, x = (s.minX + s.maxX) / 2, z = (s.minZ + s.maxZ) / 2;
+    if (s.kind === 'ramp') {
+      const geometry = new THREE.BoxGeometry(w, 1, d);
+      const positions = geometry.attributes.position;
+      for (let i = 0; i < positions.count; i++) {
+        const t = (d / 2 - positions.getZ(i)) / d;
+        positions.setY(i, positions.getY(i) > 0 ? t * route.height : 0);
+      }
+      geometry.computeVertexNormals();
+      const top = stage === 0 ? mat(s.id === 'ramp-left' ? colors.blue : colors.pink) : routeWoodMaterial;
+      const side = stage === 0 ? propMaterial(1, 0xfff8e5) : routeWoodMaterial;
+      const ramp = mesh(geometry, [side, side, top, side, side, side]); ramp.position.set(x, 0, z);
+      ramp.name = s.id;
+      const arrow = mesh(new THREE.PlaneGeometry(w - 0.25, Math.hypot(d, route.height)), arrowMaterial);
+      arrow.position.set(x, route.height / 2 + 0.012, z);
+      arrow.rotation.x = -Math.PI / 2 + Math.atan2(route.height, d);
+      arrow.castShadow = arrow.receiveShadow = false;
+      // Three inlaid metal strips emphasize the change in slope at the entrance.
+      for (let i = 0; i < 3; i++) {
+        const stripe = box(w - 0.2, 0.025, 0.06, colors.yellow, x, 0.015 + i * 0.045, s.maxZ - i * 0.12, 0.008);
+        stripe.castShadow = false;
+      }
+    } else if (s.id === 'bridge') {
+      if (stage === 0) {
+        box(w, 0.18, d, colors.yellow, x, s.height - 0.09, z, 0.035);
+        const top = mesh(new THREE.PlaneGeometry(w - 0.04, d - 0.04), rulerMaterial);
+        top.rotation.x = -Math.PI / 2; top.position.set(x, s.height + 0.004, z); top.castShadow = false;
+        for (const end of [s.minX + 0.12, s.maxX - 0.12]) box(0.2, 0.19, d + 0.01, colors.cream, end, s.height - 0.09, z, 0.025).material = propMaterial(2);
+      } else if (stage === 1) {
+        box(w, 0.18, d, colors.cream, x, s.height - 0.09, z, 0.04).material = routeWoodMaterial;
+        for (const edge of [s.minZ + 0.06, s.maxZ - 0.06]) {
+          const trim = box(w - 0.2, 0.025, 0.03, colors.cream, x, s.height + 0.015, edge, 0.008); trim.castShadow = false;
+        }
+      } else {
+        const boards = Math.ceil(w / 0.85);
+        // The structural beam is continuous; boards have only shallow visual seams.
+        box(w, 0.11, d - 0.12, colors.brown, x, s.height - 0.125, z, 0.025).material = routeWoodMaterial;
+        for (let i = 0; i < boards; i++) {
+          const bx = s.minX + (i + 0.5) * w / boards;
+          box(w / boards - 0.018, 0.08, d, colors.cream, bx, s.height - 0.04, z, 0.025).material = routeWoodMaterial;
+          for (const boltZ of [s.minZ + 0.12, s.maxZ - 0.12]) {
+            const nail = cylinder(0.028, 0.028, 0.012, colors.brown, bx, s.height + 0.004, boltZ, group, 6); nail.castShadow = false; nail.material = propMaterial(2);
+          }
+        }
+      }
+    } else if (stage === 0) {
+      for (let i = 0; i < 3; i++) {
+        const shelf = book(x, z, w, s.height / 3, d, [colors.pink, colors.yellow, colors.blue][i], 0);
+        shelf.position.y = i * s.height / 3;
+      }
+    } else if (stage === 1) {
+      box(w, s.height - 0.16, d, colors.cream, x, (s.height - 0.16) / 2, z, 0.08).material = propMaterial(1, 0xfff3da);
+      box(w + 0.04, 0.16, d + 0.04, colors.peach, x, s.height - 0.08, z, 0.05).material = routeWoodMaterial;
+      decal(s.id === 'platform-left' ? 3 : 4, Math.min(w - 0.4, 3), s.height - 0.55, x, s.height / 2, s.maxZ + 0.012);
+      for (const sx of [s.minX + 0.14, s.maxX - 0.14]) box(0.07, s.height - 0.2, 0.025, 0xd5bb8f, sx, s.height / 2, s.maxZ + 0.02, 0.01).castShadow = false;
+    } else {
+      const radius = Math.min(w, d) * 0.47;
+      const pot = cylinder(radius, radius * 0.75, s.height - 0.22, colors.peach, x, (s.height - 0.22) / 2, z); pot.material = propMaterial(3);
+      const potLip = torus(radius, 0.1, colors.peach, x, s.height - 0.33, z); potLip.rotation.x = Math.PI / 2; potLip.material = propMaterial(3);
+      box(w, 0.18, d, colors.cream, x, s.height - 0.09, z, 0.04).material = routeWoodMaterial;
+      s.bottom = s.height - 0.18;
+      obstacles.push({ x, z, r: radius, minY: 0, maxY: s.height - 0.18 });
+    }
+  }
+  // The star is a legible invitation to climb. main.js owns its timed XP reward.
+  const rewardRing = torus(0.65, 0.035, colors.yellow, route.reward.x, route.height + 0.035, route.reward.z); rewardRing.rotation.x = Math.PI / 2;
+  rewardRing.userData.keepUnbatched = true;
+  rewardRing.material = new THREE.MeshBasicMaterial({ color: colors.yellow }); resources.add(rewardRing.material); rewardRing.castShadow = false;
+  const rewardStar = mesh(new THREE.OctahedronGeometry(0.22), mat(colors.yellow));
+  rewardStar.userData.keepUnbatched = true;
+  rewardStar.position.set(route.reward.x, route.height + 0.6, route.reward.z);
+  animated.push((t) => { rewardStar.rotation.y = t; rewardStar.position.y = route.height + 0.6 + Math.sin(t * 2) * 0.12; });
+  interaction('launch', route.reward.x, route.bridgeZ + 3.8, '弹弹软垫', '弹上高处，找到星星；从高台跃下可制造落地冲击', (g, item) => {
+    cylinder(1.15, 1.22, 0.18, colors.cream, 0, 0.09, 0, g);
+    const pad = cylinder(1.08, 1.05, 0.14, colors.teal, 0, 0.23, 0, g);
+    const ring = torus(0.88, 0.08, colors.yellow, 0, 0.32, 0, g); ring.rotation.x = Math.PI / 2;
+    const arrow = mesh(new THREE.PlaneGeometry(1.3, 1.3), arrowMaterial, g); arrow.rotation.x = -Math.PI / 2; arrow.position.y = 0.315; arrow.castShadow = false;
+    item.launchVelocity = 12;
+    let pulse = 0; g.userData.trigger = () => { pulse = 1; };
+    animated.push((t, dt) => { pulse = Math.max(0, pulse - dt * 2); pad.scale.y = 1 - Math.sin(pulse * Math.PI) * 0.5; });
+  });
+  const terrain = createTerrain({ surfaces: route.surfaces, nodes: route.nodes, bounds, obstacles });
+
+  function batchStaticGeometry() {
+    const buckets = new Map();
+    let before = 0, retained = 0;
+    group.updateMatrixWorld(true);
+    const inverse = group.matrixWorld.clone().invert();
+    group.traverse(node => {
+      if (!node.isMesh) return;
+      before++;
+      let parent = node, dynamic = false;
+      while (parent && parent !== group) { if (parent.userData.keepUnbatched) { dynamic = true; break; } parent = parent.parent; }
+      if (dynamic || node.isInstancedMesh || Array.isArray(node.material) || !node.visible) { retained++; return; }
+      const key = `${node.material.uuid}:${node.castShadow}:${node.receiveShadow}:${node.renderOrder}`;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(node);
+    });
+    let batches = 0, removed = 0;
+    for (const list of buckets.values()) {
+      if (list.length < 2) { retained += list.length; continue; }
+      const geometries = list.map(node => {
+        const geometry = node.geometry.index ? node.geometry.toNonIndexed() : node.geometry.clone();
+        geometry.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inverse, node.matrixWorld));
+        // Meshes use a single material, so their obsolete face groups are unused.
+        geometry.clearGroups();
+        return geometry;
+      });
+      const geometry = mergeGeometries(geometries, false);
+      for (const temporary of geometries) temporary.dispose();
+      if (!geometry) { retained += list.length; continue; }
+      resources.add(geometry);
+      geometry.computeBoundingSphere(); geometry.computeBoundingBox();
+      const combined = new THREE.Mesh(geometry, list[0].material);
+      combined.name = 'static-material-batch';
+      combined.castShadow = list[0].castShadow;
+      combined.receiveShadow = list[0].receiveShadow;
+      combined.renderOrder = list[0].renderOrder;
+      // Rays still hit the exact baked triangles, including all bridge surfaces.
+      for (const node of list) node.removeFromParent();
+      group.add(combined); batches++; removed += list.length;
+    }
+    return { before, after: retained + batches, batches, removed };
+  }
+  const staticBatching = batchStaticGeometry();
+
   return {
     group, obstacles, interactables, spawnPoints, bounds,
+    staticBatching,
+    surfaces: route.surfaces,
+    elevatedRoutes: [{ id: `route-${stage}`, label: route.label, ...route }],
+    sampleGround: terrain.sampleGround,
+    moveActor: terrain.moveActor,
+    getNavigationTarget: terrain.getNavigationTarget,
+    segmentBlocked: terrain.segmentBlocked,
+    collectRouteReward(id = `route-${stage}`) {
+      if (id !== `route-${stage}` || route.reward.collected) return false;
+      route.reward.collected = true;
+      rewardRing.visible = rewardStar.visible = false;
+      return true;
+    },
     update(t, dt = 0.016) {
       for (const fn of animated) fn(t, dt);
     },

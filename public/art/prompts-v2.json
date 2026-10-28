@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-28",
+  "tool": "built-in image_gen",
+  "actual_dimensions": [
+    1254,
+    1254
+  ],
+  "assets": [
+    {
+      "file": "creature-materials-v2.jpg",
+      "prompt": "Use case: stylized-concept. Asset type: production albedo texture atlas for a premium cozy miniature 3D action game, NOT a poster or concept scene. Generate one square 2048x2048 image divided into exactly four equal square quadrants, no gutters or borders. Every quadrant is a continuous flat front-on high resolution MATERIAL swatch filling the whole quadrant edge to edge. Top left: golden toasted biscuit with finely porous baked crumb, scattered tiny darker toasted freckles, delicate crisp warm caramel edges but no distinct biscuit outline. Top right: warm ivory fine plush toy velour, short dense fibers with subtle natural directional variation, almost cream white, no seams or objects. Bottom left: glossy raspberry-red candy lacquer, smooth rich candy red with extremely subtle tiny sugar specks, uniform diffuse illumination, no specular blobs baked in. Bottom right: soft sage-green jelly confection, subtle tiny bubbles and faint irregular gradients, no silhouette or outline. Art direction: refined tactile cute stop-motion confectionery, natural microtexture, readable color, gentle not noisy. Flat diffuse illumination, no perspective, no cast shadows, no labels, no text, no objects, no faces, no watermark. Each quadrant will be separately cropped and UV mapped to 3D creatures and weapons; no decorative illustrations."
+    },
+    {
+      "file": "prop-materials-v2.jpg",
+      "prompt": "Use case: stylized-concept. Asset type: production square 2x2 albedo material texture atlas for a cozy polished miniature 3D game. Four equal perfect square quadrants filling entire image edge to edge, no gutter, no border. Top left warm natural cork with fine irregular endgrain cork pores, recognizable tiny compressed particles, refined honey tan. Top right warm kraft cardboard paper, subtle dense interwoven fibers and tiny speckles, beige tan natural even diffuse tone, no folds. Bottom left warm brushed aluminum, soft satin silver-grey, delicate parallel fine horizontal brushed hairline marks, slightly warm grey diffuse uniform field, no baked object reflections. Bottom right fired terracotta earthenware, fine clay pores and minute granular mineral speckles, cozy orange sienna, subtle tactile variation. Orthographic front on flat material surface ONLY, each texture seamlessly continuing in its quadrant and usable on repeating 3D UVs. No objects, no shapes, no illustrations, no shadows, no gradient lighting, no text, no labels. Rich but restrained fine texture, handcrafted dollhouse realism, retain contrast between porous cork, fibrous paper, metallic fine brushing, ceramic clay. 2048x2048."
+    }
+  ]
+}
